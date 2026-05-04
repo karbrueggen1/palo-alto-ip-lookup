@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_prefix=1, x_proto=1, x_host=1, x_port=1)
-limiter = Limiter(get_remote_address, app=app, default_limits=["30 per minute"])
+limiter = Limiter(get_remote_address, app=app, default_limits=["30 per minute"], storage_uri="memory://")
 
 CACHE_REFRESH_INTERVAL = 6 * 3600  # 6 hours
 
