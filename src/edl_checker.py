@@ -1,7 +1,7 @@
 import ipaddress
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Dict, List, Set, Tuple, Union
+from typing import Dict, List, Tuple, Union
 
 import requests
 
@@ -11,11 +11,6 @@ MAX_WORKERS = 50
 
 
 def fetch_edl_subnets(url: str) -> List[ipaddress.IPv4Network]:
-    """Fetch and parse subnets from an EDL URL.
-
-    Returns:
-        List of IPv4Network objects
-    """
     logger.debug(f"Fetching EDL from {url}")
     resp = requests.get(url, timeout=30)
     resp.raise_for_status()
@@ -34,63 +29,46 @@ def fetch_edl_subnets(url: str) -> List[ipaddress.IPv4Network]:
     return networks
 
 
-def _check_single_feed(
-    target: Union[ipaddress.IPv4Address, ipaddress.IPv4Network],
-    feed_name: str,
-    feed_url: str,
-) -> Union[Tuple[str, str, List[ipaddress.IPv4Network]], None]:
-    """Check if target IP is in a single feed. Returns match or None."""
-    try:
-        subnets = fetch_edl_subnets(feed_url)
-    except requests.RequestException as e:
-        logger.error(f"Failed to fetch {feed_url}: {e}")
-        return None
-
-    matching_subnets = []
-    for subnet in subnets:
-        if isinstance(target, ipaddress.IPv4Address):
-            if target in subnet:
-                matching_subnets.append(subnet)
-        else:
-            if target.overlaps(subnet):
-                matching_subnets.append(subnet)
-
-    if matching_subnets:
-        return (feed_name, feed_url, matching_subnets)
-    return None
-
-
-def check_ip_against_feeds(
-    target: Union[ipaddress.IPv4Address, ipaddress.IPv4Network],
+def preload_subnets(
     feeds: List[Tuple[str, str]],
-) -> List[Tuple[str, str, List[ipaddress.IPv4Network]]]:
-    """Check if an IP or network is contained in any of the EDL feeds.
-
-    Uses concurrent requests to check all feeds in parallel.
-
-    Args:
-        target: IPv4 address or network to check
-        feeds: List of (name, url) tuples
-
-    Returns:
-        List of (feed_name, feed_url, matching_subnets) for feeds containing the target
-    """
-    matches = []
-    checked = 0
+) -> Dict[str, List[ipaddress.IPv4Network]]:
+    """Fetch all feed subnets in parallel and return a url→subnets mapping."""
+    result: Dict[str, List[ipaddress.IPv4Network]] = {}
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = {
-            executor.submit(_check_single_feed, target, name, url): (name, url)
-            for name, url in feeds
-        }
-
+        futures = {executor.submit(fetch_edl_subnets, url): url for _, url in feeds}
+        loaded = 0
         for future in as_completed(futures):
-            checked += 1
-            result = future.result()
-            if result is not None:
-                matches.append(result)
-            if checked % 100 == 0:
-                logger.info(f"Checked {checked}/{len(feeds)} feeds...")
+            url = futures[future]
+            loaded += 1
+            try:
+                result[url] = future.result()
+            except requests.RequestException as e:
+                logger.error(f"Failed to fetch {url}: {e}")
+                result[url] = []
+            if loaded % 50 == 0:
+                logger.info(f"Preloaded {loaded}/{len(feeds)} feeds...")
 
-    logger.info(f"Checked all {len(feeds)} feeds. Found {len(matches)} matches.")
+    logger.info(f"Preloaded all {len(feeds)} feeds.")
+    return result
+
+
+def check_ip_against_cache(
+    target: Union[ipaddress.IPv4Address, ipaddress.IPv4Network],
+    feeds: List[Tuple[str, str]],
+    subnet_cache: Dict[str, List[ipaddress.IPv4Network]],
+) -> List[Tuple[str, str, List[ipaddress.IPv4Network]]]:
+    """Check target against the in-memory subnet cache. No network I/O."""
+    matches = []
+    for name, url in feeds:
+        subnets = subnet_cache.get(url, [])
+        matching = [
+            s for s in subnets
+            if (target in s) if isinstance(target, ipaddress.IPv4Address)
+            else target.overlaps(s)
+        ]
+        if matching:
+            matches.append((name, url, matching))
+
+    logger.info(f"Checked {len(feeds)} feeds. Found {len(matches)} matches.")
     return matches
