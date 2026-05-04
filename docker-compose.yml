@@ -3,7 +3,7 @@ version: '3.8'
 services:
   palo-ip-lookup:
     container_name: palo-ip-lookup
-    build: .
+    image: ghcr.io/karbrueggen1/palo-alto-ip-lookup:latest
     ports:
       - "8080:5000"
     environment:
