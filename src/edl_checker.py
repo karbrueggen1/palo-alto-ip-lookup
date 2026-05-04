@@ -64,8 +64,7 @@ def check_ip_against_cache(
         subnets = subnet_cache.get(url, [])
         matching = [
             s for s in subnets
-            if (target in s) if isinstance(target, ipaddress.IPv4Address)
-            else target.overlaps(s)
+            if (target in s if isinstance(target, ipaddress.IPv4Address) else target.overlaps(s))
         ]
         if matching:
             matches.append((name, url, matching))
